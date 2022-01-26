@@ -33,10 +33,10 @@ COPY --chown=algorithm:algorithm process.py /opt/algorithm/
 
 # Copy additional files, such as model weights
 # e.g. `COPY --chown=algorithm:algorithm weights.pth /opt/algorithm/weights.pth`
-COPY --chown=algorithm:algorithm densenet_weights_train_epoch6.pth /opt/algorithm/densenet_weights_train_epoch6.pth
-COPY --chown=algorithm:algorithm se_resnext_weights_train_epoch6.pth /opt/algorithm/se_resnext_weights_train_epoch6.pth
-COPY --chown=algorithm:algorithm vgg16_epoch5.pth /opt/algorithm/vgg16_epoch5.pth
-COPY --chown=algorithm:algorithm yolo50epoch288V2_best.pt /opt/algorithm/yolo50epoch288V2_best.pt
+COPY --chown=algorithm:algorithm densenet_weights.pth /opt/algorithm/densenet_weights.pth
+COPY --chown=algorithm:algorithm se_resnext_weights.pth /opt/algorithm/se_resnext_weights.pth
+COPY --chown=algorithm:algorithm vgg16_weights.pth /opt/algorithm/vgg16_weights.pth
+COPY --chown=algorithm:algorithm yolov5_weights.pt /opt/algorithm/yolov5_weights.pt
 COPY --chown=algorithm:algorithm yolov5 /opt/algorithm/yolov5
 COPY --chown=algorithm:algorithm Arial.ttf /home/algorithm/.config/Ultralytics/Arial.ttf
 

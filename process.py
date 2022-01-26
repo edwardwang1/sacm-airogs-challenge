@@ -296,6 +296,7 @@ class airogs_algorithm(ClassificationAlgorithm):
         return results
 
     def predict(self, *, input_image_array: np.ndarray) -> Dict:
+        print("----FLAG-----")
         yolo_weights = 'yolov5'
         se_resnext_weights = "se_resnext_weights.pth"
         densenet_weights = "densenet_weights.pth"
