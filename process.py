@@ -296,7 +296,8 @@ class airogs_algorithm(ClassificationAlgorithm):
         return results
 
     def predict(self, *, input_image_array: np.ndarray) -> Dict:
-        print("----FLAG-----")
+        print("----FLAG1-----")
+        print("DEVICE is: " + device)
         yolo_weights = 'yolov5'
         se_resnext_weights = "se_resnext_weights.pth"
         densenet_weights = "densenet_weights.pth"
@@ -315,9 +316,9 @@ class airogs_algorithm(ClassificationAlgorithm):
         # to here with your inference algorithm
 
         results = predict(input_image_array, models)
-        rg_likelihood = str(results["referable-glaucoma-likelihood"])
+        rg_likelihood = float(results["referable-glaucoma-likelihood"])
         rg_binary = results["referable-glaucoma-binary"]
-        ungradability_score = str(results["ungradability-score"])
+        ungradability_score = float(results["ungradability-score"])
         ungradability_binary = results["ungradability-binary"]
 
         out = {
