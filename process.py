@@ -26,6 +26,8 @@ from evalutils.validators import (
 )
 from evalutils.io import ImageLoader
 
+IMAGE_SIZE = 120
+
 GPU = torch.cuda.is_available()
 if GPU:
     device = "cuda"
@@ -92,7 +94,7 @@ def getBoundsVanilla(img):
 
 #image = cv2.imread("Training\\TRAIN000054.jpg")
 #Conveting to PIL image
-def get224ODFromNumpyArray(model, image):
+def getODFromNumpyArray(model, image, image_size):
     #image = cv2.imread(imagePath)
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     image = getBoundsVanilla(image)
@@ -132,21 +134,20 @@ def get224ODFromNumpyArray(model, image):
         y_end += down_adj
 
     OD_fullsize = im_pil.crop((x_start, y_start, x_end, y_end))
-    OD224 = OD_fullsize.resize((224,224))
-    return OD224
+    OD = OD_fullsize.resize((image_size,image_size))
+    return OD
 
-def getPreds(inputImage, densenet, seresnext, effnet, vgg16):
-   
-    seresnext_pred = predictSingle(seresnext, inputImage, 224)
-    densenet_pred = predictSingle(densenet, inputImage, 224)
-    vgg16_pred = predictSingle(vgg16, inputImage, 224)
+def getPreds(inputImage, densenet, seresnext, effnet, vgg16, image_size):
+    seresnext_pred = predictSingle(seresnext, inputImage, image_size)
+    densenet_pred = predictSingle(densenet, inputImage, image_size)
+    vgg16_pred = predictSingle(vgg16, inputImage, image_size)
+    effnet_pred = predictSingle(effnet, inputImage, image_size)
     
-    
-    rg_likelihood = np.mean((seresnext_pred, densenet_pred, vgg16_pred))
+    rg_likelihood = np.mean((seresnext_pred, densenet_pred, vgg16_pred, effnet_pred))
     rg_binary = bool(rg_likelihood > 0.5)
     
-    ungradability_score = np.std((seresnext_pred, densenet_pred, vgg16_pred))
-    ungradability_binary = bool(ungradability_score > 0.1)
+    ungradability_score = np.std((seresnext_pred, densenet_pred, vgg16_pred, effnet_pred))
+    ungradability_binary = bool(ungradability_score > 0.3)
     
     out = {
         "referable-glaucoma-likelihood": rg_likelihood,  # Likelihood for 'referable glaucoma'
@@ -175,12 +176,15 @@ def getModels(yolo_weights, densenet_weights, seresnext_weights, effnet_weights,
     else:
         seresnext.load_state_dict(torch.load(seresnext_weights, map_location=torch.device('cpu')))
     
-    #effnet = EfficientNet.from_name('efficientnet-b5')
-    #num_ftrs = effnet._fc.in_features
-    #effnet._fc = nn.Sequential(nn.Dropout(0.0), nn.Linear(num_ftrs, 1, bias=True))
-    #effnet.load_state_dict(torch.load(effnet_weights)) 
-    effnet = None
-    
+    effnet = EfficientNet.from_name('efficientnet-b5')
+    num_ftrs = effnet._fc.in_features
+    effnet._fc = nn.Sequential(nn.Dropout(0.0), nn.Linear(num_ftrs, 1, bias=True))
+    if GPU:
+        effnet.load_state_dict(torch.load(effnet_weights)) 
+    else:
+        effnet.load_state_dict(torch.load(effnet_weights, map_location=torch.device('cpu')))
+
+
     vgg16 = models.vgg16()
     vgg16.classifier[5] = nn.Dropout(0.0)
     num_ftrs = vgg16.classifier[6].in_features
@@ -216,10 +220,10 @@ def predictSingle(model, img, size):
     result = output.cpu().detach().numpy().flatten()
     return result[0]
 
-def predict(image, models):
-    im = get224ODFromNumpyArray(models["yolo"], image)
+def predict(image, models, image_size):
+    im = getODFromNumpyArray(models["yolo"], image, image_size)
 
-    out = getPreds(im, models["densenet"], models["seresnext"], models["effnet"], models["vgg16"])
+    out = getPreds(im, models["densenet"], models["seresnext"], models["effnet"], models["vgg16"], image_size)
     return out
     
 
@@ -296,26 +300,16 @@ class airogs_algorithm(ClassificationAlgorithm):
         return results
 
     def predict(self, *, input_image_array: np.ndarray) -> Dict:
-        print("----FLAG1-----")
+        print("----Submission 1-----")
         print("DEVICE is: " + device)
         yolo_weights = 'yolov5'
         se_resnext_weights = "se_resnext_weights.pth"
         densenet_weights = "densenet_weights.pth"
         vgg16_weights = "vgg16_weights.pth"
-        eff_net_weights = ""
-        models = getModels(yolo_weights, densenet_weights, se_resnext_weights, eff_net_weights, vgg16_weights)
+        eff_net_weights = "effnetb5_weights.pth"
+        my_models = getModels(yolo_weights, densenet_weights, se_resnext_weights, eff_net_weights, vgg16_weights)
 
-        # From here, use the input_image to predict the output
-        # We are using a not-so-smart algorithm to predict the output, you'll want to do your model inference here
-
-        # Replace starting here
-        rg_likelihood = ((input_image_array - input_image_array.min()) / (input_image_array.max() - input_image_array.min())).mean()
-        rg_binary = bool(rg_likelihood > .2)
-        ungradability_score = rg_likelihood * 15
-        ungradability_binary = bool(rg_likelihood < .2)
-        # to here with your inference algorithm
-
-        results = predict(input_image_array, models)
+        results = predict(input_image_array, my_models, IMAGE_SIZE)
         rg_likelihood = float(results["referable-glaucoma-likelihood"])
         rg_binary = results["referable-glaucoma-binary"]
         ungradability_score = float(results["ungradability-score"])
