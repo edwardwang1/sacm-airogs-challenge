@@ -579,7 +579,7 @@ class airogs_algorithm(ClassificationAlgorithm):
     
     def process_case(self, *, idx, case):
         # Load and test the image(s) for this case
-        print("----Submission 2-----")
+        print("----Submission 3-----")
         print("DEVICE is: " + device)
         yolo_weights = 'yolov5'
         se_resnext_weights = "se_resnext_weights.pth"
