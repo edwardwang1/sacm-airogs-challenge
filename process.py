@@ -334,8 +334,6 @@ def getBoundsVanilla(img):
 
     return padded
 
-#image = cv2.imread("Training\\TRAIN000054.jpg")
-#Conveting to PIL image
 def getODFromCroppedImage(model, image):
     #image = cv2.imread(imagePath)
     #Crop to 288 for Yolo
@@ -396,7 +394,6 @@ def getAutoencoderLoss(image, model, imgSize):
 
     return loss.cpu().detach().numpy().flatten()[0]
 
-
 def getPreds(OD_fullsize, imageCroppedBounds, OD_conf, densenet, seresnext, effnet, vgg16, inception, autoencoder, vae):
     im120 = OD_fullsize.resize((120,120))
     im224 = OD_fullsize.resize((224,224))
@@ -411,10 +408,9 @@ def getPreds(OD_fullsize, imageCroppedBounds, OD_conf, densenet, seresnext, effn
     autoencoder_loss = getAutoencoderLoss(imageCroppedBounds, autoencoder, 256)
     vae_loss = getAutoencoderLoss(imageCroppedBounds, vae, 224)
 
-    rg_likelihood = np.mean((seresnext_pred, densenet_pred, vgg16_pred, effnet_pred, inception_pred))
+    #rg_likelihood = np.mean((seresnext_pred, densenet_pred, vgg16_pred, effnet_pred, inception_pred))
+    rg_likelihood = np.mean((seresnext_pred, densenet_pred, effnet_pred, inception_pred))
     rg_binary = bool(rg_likelihood > 0.5)
-    
-    pred_std = np.std((seresnext_pred, densenet_pred, vgg16_pred, effnet_pred, inception_pred))
     
     if rg_likelihood >= 0 and rg_likelihood <= 0.5:
         pred_scale =  2 * rg_likelihood
