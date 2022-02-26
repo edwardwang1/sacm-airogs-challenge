@@ -7,6 +7,11 @@ from pathlib import Path
 import tifffile
 import numpy as np
 
+import pytorch_lightning as pl
+from pl_bolts.models.autoencoders.components import (resnet18_decoder,
+    resnet18_encoder,
+)
+from pl_bolts.models.autoencoders import VAE
 
 import torch
 import pandas as pd
@@ -31,6 +36,245 @@ if GPU:
     device = "cuda"
 else:
     device = "cpu"
+
+class VAE2(pl.LightningModule):
+    """
+    Standard VAE with Gaussian Prior and approx posterior.
+    Model is available pretrained on different datasets:
+    """
+
+    def __init__(
+        self,
+        input_height: int,
+        enc_type: str = 'resnet18',
+        first_conv: bool = False,
+        maxpool1: bool = False,
+        enc_out_dim: int = 512,
+        kl_coeff: float = 0.1,
+        latent_dim: int = 256,
+        lr: float = 1e-5,
+        **kwargs
+    ):
+        """
+        Args:
+            input_height: height of the images
+            enc_type: option between resnet18 or resnet50
+            first_conv: use standard kernel_size 7, stride 2 at start or
+                replace it with kernel_size 3, stride 1 conv
+            maxpool1: use standard maxpool to reduce spatial dim of feat by a factor of 2
+            enc_out_dim: set according to the out_channel count of
+                encoder used (512 for resnet18, 2048 for resnet50)
+            kl_coeff: coefficient for kl term of the loss
+            latent_dim: dim of latent space
+            lr: learning rate for Adam
+        """
+
+        super(VAE2, self).__init__()
+
+        self.save_hyperparameters()
+
+        self.lr = lr
+        self.kl_coeff = kl_coeff
+        self.enc_out_dim = enc_out_dim
+        self.latent_dim = latent_dim
+        self.input_height = input_height
+
+        valid_encoders = {
+            'resnet18': {
+                'enc': resnet18_encoder,
+                'dec': resnet18_decoder,
+            },
+        }
+
+        self.encoder = valid_encoders[enc_type]['enc'](first_conv, maxpool1)
+        self.decoder = valid_encoders[enc_type]['dec'](self.latent_dim, self.input_height, first_conv, maxpool1)
+
+        self.fc_mu = nn.Linear(self.enc_out_dim, self.latent_dim)
+        self.fc_var = nn.Linear(self.enc_out_dim, self.latent_dim)
+
+    
+        self.train_loss = 0
+        self.val_loss = 0
+        self.epoch = 0
+        self.images = []
+        self.input_images = []
+        self.val_step = 0
+        self.train_losses = []
+    
+    def forward(self, x):
+        x = self.encoder(x)
+        mu = self.fc_mu(x)
+        log_var = self.fc_var(x)
+        p, q, z = self.sample(mu, log_var)
+        return self.decoder(z)
+
+    def _run_step(self, x):
+        x = self.encoder(x)
+        mu = self.fc_mu(x)
+        log_var = self.fc_var(x)
+        p, q, z = self.sample(mu, log_var)
+        return z, self.decoder(z), p, q
+
+    def sample(self, mu, log_var):
+        std = torch.exp(log_var / 2)
+        p = torch.distributions.Normal(torch.zeros_like(mu), torch.ones_like(std))
+        q = torch.distributions.Normal(mu, std)
+        z = q.rsample()
+        return p, q, z
+
+    def stepfadfadsf(self, batch, batch_idx):
+        x = batch
+        z, x_hat, p, q = self._run_step(x)
+
+        recon_loss = F.mse_loss(x_hat, x, reduction='mean')
+
+        log_qz = q.log_prob(z)
+        log_pz = p.log_prob(z)
+
+        kl = log_qz - log_pz
+        kl = kl.mean()
+        kl *= self.kl_coeff
+
+        loss = kl + recon_loss
+
+        logs = {
+            "recon_loss": recon_loss,
+            "kl": kl,
+            "loss": loss,
+        }
+        return loss, logs, 
+
+    def training_step(self, batch, batch_idx):
+        x = batch
+        z, x_hat, p, q = self._run_step(x)
+
+        recon_loss = F.mse_loss(x_hat, x, reduction='mean')
+
+        log_qz = q.log_prob(z)
+        log_pz = p.log_prob(z)
+
+        kl = log_qz - log_pz
+        kl = kl.mean()
+        kl *= self.kl_coeff
+
+        loss = kl + recon_loss
+
+        
+        #self.log_dict({f"train_{k}": v for k, v in logs.items()}, on_step=True, on_epoch=False)
+        self.train_losses.append(recon_loss.cpu().detach().numpy())
+        self.train_loss = recon_loss.cpu().detach().numpy()
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        x = batch
+        z, x_hat, p, q = self._run_step(x)
+
+        recon_loss = F.mse_loss(x_hat, x, reduction='mean')
+
+        log_qz = q.log_prob(z)
+        log_pz = p.log_prob(z)
+
+        kl = log_qz - log_pz
+        kl = kl.mean()
+        kl *= self.kl_coeff
+
+        loss = kl + recon_loss
+
+        #self.log_dict({f"val_{k}": v for k, v in logs.items()})
+        self.val_loss += recon_loss.cpu().detach().numpy()
+        
+        imgs = x_hat.cpu().detach().numpy()
+        self.images.append([Image.fromarray((image*255).astype(np.uint8).transpose(1,2,0)) for image in imgs])
+        
+        if self.epoch == 0 or self.epoch==1:
+            self.input_images.append([Image.fromarray((image*255).astype(np.uint8).transpose(1,2,0)) for image in x.cpu().detach().numpy()])
+        
+        self.val_step += 1
+        
+        return loss
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
+    
+    def validation_epoch_end(self, outputs):
+        #print(self.epoch)
+        
+        self.val_loss = self.val_loss / self.val_step
+        
+        if len(self.train_losses) > 626:
+            self.train_loss = np.mean(self.train_losses[:-625])
+        
+        if self.epoch == 0 or self.epoch == 1:
+            self.images = [item for sublist in self.images for item in sublist]
+            self.input_images = [item for sublist in self.input_images for item in sublist]
+            logs = {
+                "train_loss": self.train_loss,
+                "val_loss": self.val_loss,
+                "epoch": self.epoch,
+                "recons": [wandb.Image(image) for image in self.images[:100]],
+                "originals": [wandb.Image(image) for image in self.input_images[:100]],
+            }
+            self.images = []
+            self.input_images = []
+        else:
+            self.images = [item for sublist in self.images for item in sublist]
+            logs = {
+                "train_loss": self.train_loss,
+                "val_loss": self.val_loss,
+                "epoch": self.epoch,
+                "recons": [wandb.Image(image) for image in self.images[:100]],
+            }
+            self.images = []
+        
+        save_str = "VAE_resnet18" + "_epoch+15_" + str(self.epoch) + ".pth"
+        torch.save(self.state_dict(), save_str)
+        shutil.copy(save_str, os.path.join(wandb.run.dir, save_str))
+        wandb.save(os.path.join(wandb.run.dir, save_str))
+
+        wandb.log(logs)
+        
+        self.epoch += 1
+        self.val_step = 0
+
+class Autoencoder(nn.Module):
+    def __init__(self):
+        super(Autoencoder, self).__init__()
+        self.encoder = nn.Sequential( # like the Composition layer you built
+            nn.Conv2d(3, 8, 3, stride=2, padding=1), #128x128x8
+            nn.ReLU(),
+            nn.Conv2d(8, 16, 3, stride=2, padding=1), #64x64x16
+            nn.ReLU(),
+            nn.Conv2d(16, 32, 3, stride=2, padding=1),#32x32x32
+            nn.ReLU(),
+            nn.Conv2d(32, 64, 3, stride=2, padding=1), #16x16x64
+            nn.ReLU(),
+            nn.Conv2d(64, 128, 3, stride=2, padding=1), #8x8x128
+            nn.ReLU(),
+            nn.Conv2d(128, 256, 3, stride=2, padding=1), #4x4x256
+            nn.ReLU(),
+            nn.Conv2d(256, 512, 3, stride=2, padding=1), #4x4x512
+        )
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(512, 256, 3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(256, 128, 3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, 3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(16, 8, 3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(8, 3, 3, stride=2, padding=1, output_padding=1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.decoder(x)
+        return x
 
 def getOD(model, image):
     results = model(image, size=288).pandas().xywhn[0]
@@ -92,15 +336,10 @@ def getBoundsVanilla(img):
 
 #image = cv2.imread("Training\\TRAIN000054.jpg")
 #Conveting to PIL image
-def getODFromNumpyArray(model, image):
+def getODFromCroppedImage(model, image):
     #image = cv2.imread(imagePath)
-    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    image = getBoundsVanilla(image)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    im_pil = Image.fromarray(image)
-
     #Crop to 288 for Yolo
-    im288 = im_pil.resize((288,288))
+    im288 = image.resize((288,288))
     OD_xcent, OD_ycent, OD_width, OD_height, OD_conf = getOD(model, im288)
     #print(OD_xcent, OD_ycent, OD_width, OD_height, OD_conf)
     
@@ -110,7 +349,7 @@ def getODFromNumpyArray(model, image):
     y_start = OD_ycent - OD_height/2
     y_end = y_start + OD_height
 
-    scale = im_pil.size[0]
+    scale = image.size[0]
     x_start = int(x_start * scale)
     x_end = int(x_end * scale)
     y_start = int(y_start * scale)
@@ -131,10 +370,34 @@ def getODFromNumpyArray(model, image):
         y_start -= up_adj
         y_end += down_adj
 
-    OD_fullsize = im_pil.crop((x_start, y_start, x_end, y_end))
+    OD_fullsize = image.crop((x_start, y_start, x_end, y_end))
     return OD_fullsize, OD_conf
 
-def getPreds(OD_fullsize, OD_conf, densenet, seresnext, effnet, vgg16, inception):
+def getAutoencoderLoss(image, model, imgSize):    
+    criterion = nn.MSELoss()
+    transform = transforms.ToTensor()
+    tensor = transform(image)
+    resizeTransform = transforms.Resize([imgSize, imgSize])
+
+    if GPU:
+        tensor = resizeTransform(tensor).cuda()
+    else:
+        tensor = resizeTransform(tensor).cpu()
+    
+    if GPU:
+        model.cuda()
+    else:
+        model.cpu()
+
+    with torch.no_grad():
+        model.eval()
+        output = model(tensor[None, ...])
+        loss = criterion(output, tensor[None, ...])
+
+    return loss.cpu().detach().numpy().flatten()[0]
+
+
+def getPreds(OD_fullsize, imageCroppedBounds, OD_conf, densenet, seresnext, effnet, vgg16, inception, autoencoder, vae):
     im120 = OD_fullsize.resize((120,120))
     im224 = OD_fullsize.resize((224,224))
     im299 = OD_fullsize.resize((299,299))
@@ -145,6 +408,9 @@ def getPreds(OD_fullsize, OD_conf, densenet, seresnext, effnet, vgg16, inception
     effnet_pred = predictSingle(effnet, im224, 224)
     inception_pred = predictSingle(inception, im299, 299)
     
+    autoencoder_loss = getAutoencoderLoss(imageCroppedBounds, autoencoder, 256)
+    vae_loss = getAutoencoderLoss(imageCroppedBounds, vae, 224)
+
     rg_likelihood = np.mean((seresnext_pred, densenet_pred, vgg16_pred, effnet_pred, inception_pred))
     rg_binary = bool(rg_likelihood > 0.5)
     
@@ -155,8 +421,8 @@ def getPreds(OD_fullsize, OD_conf, densenet, seresnext, effnet, vgg16, inception
     else:
         pred_scale = -2 * (rg_likelihood - 1)
     
-    ungradability_score = (1-OD_conf) * pred_scale * pred_std
-    ungradability_binary = bool(ungradability_score > 0.075)
+    ungradability_score = (1-OD_conf) * pred_scale * autoencoder_loss * vae_loss
+    ungradability_binary = bool(ungradability_score > 2.24e-06)
     
     out = {
         "referable-glaucoma-likelihood": rg_likelihood,  # Likelihood for 'referable glaucoma'
@@ -167,7 +433,7 @@ def getPreds(OD_fullsize, OD_conf, densenet, seresnext, effnet, vgg16, inception
     
     return out
     
-def getModels(yolo_weights, densenet_weights, seresnext_weights, effnet_weights, vgg_16_weights, inception_weights):
+def getModels(yolo_weights, densenet_weights, seresnext_weights, effnet_weights, vgg_16_weights, inception_weights, autoencoder_weights, vae_weights):
     densenet = models.densenet161(pretrained=False)
     num_ftrs = densenet.classifier.in_features
     densenet.classifier = nn.Sequential(nn.Dropout(0.0), nn.Linear(num_ftrs, 1, bias=True))
@@ -202,6 +468,18 @@ def getModels(yolo_weights, densenet_weights, seresnext_weights, effnet_weights,
     else:
         vgg16.load_state_dict(torch.load(vgg_16_weights, map_location=torch.device('cpu')))
 
+    autoencoder = Autoencoder()
+    if GPU:
+        autoencoder.load_state_dict(torch.load(autoencoder_weights))
+    else:
+        autoencoder.load_state_dict(torch.load(autoencoder_weights, map_location=torch.device('cpu')))
+    
+    vae = VAE2(224)
+    if GPU:
+        vae.load_state_dict(torch.load(vae_weights))
+    else:
+        vae.load_state_dict(torch.load(vae_weights, map_location=torch.device('cpu')))
+    
     yolo = torch.hub.load(yolo_weights, 'custom', path='yolov5_weights.pt', source="local")
     
     inceptionv3 = models.inception_v3(pretrained=False)
@@ -213,9 +491,9 @@ def getModels(yolo_weights, densenet_weights, seresnext_weights, effnet_weights,
     else:
         inceptionv3.load_state_dict(torch.load(inception_weights, map_location=torch.device('cpu'))) 
 
-
-    return {"yolo": yolo, "densenet": densenet,
-        "seresnext": seresnext, "effnet": effnet, "vgg16": vgg16, "inception": inceptionv3}
+    return {"yolo": yolo, "densenet": densenet, "seresnext": seresnext, 
+        "effnet": effnet, "vgg16": vgg16, "inception": inceptionv3,
+         "autoencoder": autoencoder, "vae": vae}
 
 def predictSingle(model, img, size):
     transform = transforms.ToTensor()
@@ -240,10 +518,15 @@ def predictSingle(model, img, size):
     return result[0]
 
 def predict(image, models):
-    OD_fullsize, OD_conf = getODFromNumpyArray(models["yolo"], image)
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    imageCroppedBounds = getBoundsVanilla(image)
+    imageCroppedBounds = cv2.cvtColor(imageCroppedBounds, cv2.COLOR_BGR2RGB)
+    imageCroppedBounds = Image.fromarray(imageCroppedBounds)
+    
+    OD_fullsize, OD_conf = getODFromCroppedImage(models["yolo"], imageCroppedBounds)
 
-    out = getPreds(OD_fullsize, OD_conf, models["densenet"], models["seresnext"],
-        models["effnet"], models["vgg16"], models["inception"])
+    out = getPreds(OD_fullsize, imageCroppedBounds, OD_conf, models["densenet"], models["seresnext"],
+        models["effnet"], models["vgg16"], models["inception"], models["autoencoder"], models["vae"])
     return out, OD_conf
     
 
@@ -300,12 +583,25 @@ class airogs_algorithm(ClassificationAlgorithm):
     
     def process_case(self, *, idx, case):
         # Load and test the image(s) for this case
+        print("----Submission 2-----")
+        print("DEVICE is: " + device)
+        yolo_weights = 'yolov5'
+        se_resnext_weights = "se_resnext_weights.pth"
+        densenet_weights = "densenet_weights.pth"
+        vgg16_weights = "vgg16_weights.pth"
+        effnet_weights = "effnetb7_weights.pth"
+        inception_weights = "inceptionv3_weights.pth"
+        autoencoder_weights = "autoencoder_weights.pth"
+        vae_weights = "vae_weights.pth"
+        my_models = getModels(yolo_weights, densenet_weights, se_resnext_weights, effnet_weights, vgg16_weights, inception_weights, autoencoder_weights, vae_weights)
+
+        
         if case.path.suffix == '.tiff':
             results = []
             with tifffile.TiffFile(case.path) as stack:
                 for page in tqdm.tqdm(stack.pages):
                     input_image_array = page.asarray()
-                    results.append(self.predict(input_image_array=input_image_array))
+                    results.append(self.predict(my_models=my_models, input_image_array=input_image_array))
         else:
             input_image = SimpleITK.ReadImage(str(case.path))
             input_image_array = SimpleITK.GetArrayFromImage(input_image)
@@ -319,17 +615,7 @@ class airogs_algorithm(ClassificationAlgorithm):
 
         return results
 
-    def predict(self, *, input_image_array: np.ndarray) -> Dict:
-        print("----Submission 2-----")
-        print("DEVICE is: " + device)
-        yolo_weights = 'yolov5'
-        se_resnext_weights = "se_resnext_weights.pth"
-        densenet_weights = "densenet_weights.pth"
-        vgg16_weights = "vgg16_weights.pth"
-        effnet_weights = "effnetb7_weights.pth"
-        inception_weights = "inceptionv3_weights.pth"
-        my_models = getModels(yolo_weights, densenet_weights, se_resnext_weights, effnet_weights, vgg16_weights, inception_weights)
-
+    def predict(self, *, my_models: Dict, input_image_array: np.ndarray) -> Dict:
         results, OD_conf = predict(input_image_array, my_models)
         rg_likelihood = float(results["referable-glaucoma-likelihood"])
         rg_binary = results["referable-glaucoma-binary"]
