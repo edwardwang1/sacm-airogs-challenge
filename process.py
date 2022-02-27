@@ -407,19 +407,22 @@ def getPreds(OD_fullsize, imageCroppedBounds, OD_conf, densenet, seresnext, effn
     im224Master = OD_fullsize.resize((224,224))
     im299Master = OD_fullsize.resize((299,299))
 
-    for flip in ["h", "v"]: 
+    for flip in ["h", "v", "neither"]: 
         if flip == "h":
             im120 = OD_fullsize.resize((120,120)).transpose(Image.FLIP_TOP_BOTTOM)
             im224 = OD_fullsize.resize((224,224)).transpose(Image.FLIP_TOP_BOTTOM)
             im299 = OD_fullsize.resize((299,299)).transpose(Image.FLIP_TOP_BOTTOM)
+            imageCroppedBounds_flipped = imageCroppedBounds.transpose(Image.FLIP_TOP_BOTTOM)
         elif flip == "v":
             im120 = OD_fullsize.resize((120,120)).transpose(Image.FLIP_LEFT_RIGHT)
             im224 = OD_fullsize.resize((224,224)).transpose(Image.FLIP_LEFT_RIGHT)
             im299 = OD_fullsize.resize((299,299)).transpose(Image.FLIP_LEFT_RIGHT)
+            imageCroppedBounds_flipped = imageCroppedBounds.transpose(Image.FLIP_LEFT_RIGHT)
         else:
             im120 = OD_fullsize.resize((120,120))
             im224 = OD_fullsize.resize((224,224))
             im299 = OD_fullsize.resize((299,299))
+            imageCroppedBounds_flipped = imageCroppedBounds
     
         seresnext_pred = predictSingle(seresnext, im224, 224)
         densenet_pred = predictSingle(densenet, im120, 120)
@@ -433,13 +436,12 @@ def getPreds(OD_fullsize, imageCroppedBounds, OD_conf, densenet, seresnext, effn
         effnet_preds.append(effnet_pred)
         inception_preds.append(inception_pred)
     
-        autoencoder_loss = getAutoencoderLoss(imageCroppedBounds, autoencoder, 256)
-        vae_loss = getAutoencoderLoss(imageCroppedBounds, vae, 224)
+        autoencoder_loss = getAutoencoderLoss(imageCroppedBounds_flipped, autoencoder, 256)
+        vae_loss = getAutoencoderLoss(imageCroppedBounds_flipped, vae, 224)
 
         autoencoder_preds.append(autoencoder_loss)
         vae_preds.append(vae_loss)
-
-
+        
     #rg_likelihood = np.mean((seresnext_pred, densenet_pred, vgg16_pred, effnet_pred, inception_pred))
     
     rg_likelihood = np.mean((np.mean(seresnext_preds), 
@@ -616,7 +618,7 @@ class airogs_algorithm(ClassificationAlgorithm):
     
     def process_case(self, *, idx, case):
         # Load and test the image(s) for this case
-        print("----Submission 3-----")
+        print("----Submission 3 TTA Flip-----")
         print("DEVICE is: " + device)
         yolo_weights = 'yolov5'
         se_resnext_weights = "se_resnext_weights.pth"
