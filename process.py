@@ -407,10 +407,19 @@ def getPreds(OD_fullsize, imageCroppedBounds, OD_conf, densenet, seresnext, effn
     im224Master = OD_fullsize.resize((224,224))
     im299Master = OD_fullsize.resize((299,299))
 
-    for rotation in [0, 90, 180, 270]:   
-        im120 = im120Master.rotate(rotation)
-        im224 = im224Master.rotate(rotation)
-        im299 = im299Master.rotate(rotation)
+    for flip in ["h", "v"]: 
+        if flip == "h":
+            im120 = OD_fullsize.resize((120,120)).transpose(Image.FLIP_TOP_BOTTOM)
+            im224 = OD_fullsize.resize((224,224)).transpose(Image.FLIP_TOP_BOTTOM)
+            im299 = OD_fullsize.resize((299,299)).transpose(Image.FLIP_TOP_BOTTOM)
+        elif flip == "v":
+            im120 = OD_fullsize.resize((120,120)).transpose(Image.FLIP_LEFT_RIGHT)
+            im224 = OD_fullsize.resize((224,224)).transpose(Image.FLIP_LEFT_RIGHT)
+            im299 = OD_fullsize.resize((299,299)).transpose(Image.FLIP_LEFT_RIGHT)
+        else:
+            im120 = OD_fullsize.resize((120,120))
+            im224 = OD_fullsize.resize((224,224))
+            im299 = OD_fullsize.resize((299,299))
     
         seresnext_pred = predictSingle(seresnext, im224, 224)
         densenet_pred = predictSingle(densenet, im120, 120)
