@@ -395,30 +395,58 @@ def getAutoencoderLoss(image, model, imgSize):
     return loss.cpu().detach().numpy().flatten()[0]
 
 def getPreds(OD_fullsize, imageCroppedBounds, OD_conf, densenet, seresnext, effnet, vgg16, inception, autoencoder, vae):
-    im120 = OD_fullsize.resize((120,120))
-    im224 = OD_fullsize.resize((224,224))
-    im299 = OD_fullsize.resize((299,299))
+    densenet_preds = []
+    vgg16_preds = []
+    seresnext_preds = []
+    effnet_preds = []
+    inception_preds = []
+    autoencoder_preds = []
+    vae_preds = []
     
-    seresnext_pred = predictSingle(seresnext, im224, 224)
-    densenet_pred = predictSingle(densenet, im120, 120)
-    vgg16_pred = predictSingle(vgg16, im120, 120)
-    effnet_pred = predictSingle(effnet, im224, 224)
-    inception_pred = predictSingle(inception, im299, 299)
+    im120Master = OD_fullsize.resize((120,120))
+    im224Master = OD_fullsize.resize((224,224))
+    im299Master = OD_fullsize.resize((299,299))
+
+    for rotation in [0, 90, 180, 270]:   
+        im120 = im120Master.rotate(rotation)
+        im224 = im224Master.rotate(rotation)
+        im299 = im299Master.rotate(rotation)
     
-    autoencoder_loss = getAutoencoderLoss(imageCroppedBounds, autoencoder, 256)
-    vae_loss = getAutoencoderLoss(imageCroppedBounds, vae, 224)
+        seresnext_pred = predictSingle(seresnext, im224, 224)
+        densenet_pred = predictSingle(densenet, im120, 120)
+        vgg16_pred = predictSingle(vgg16, im120, 120)
+        effnet_pred = predictSingle(effnet, im224, 224)
+        inception_pred = predictSingle(inception, im299, 299)
+
+        seresnext_preds.append(seresnext_pred)
+        densenet_preds.append(densenet_pred)
+        vgg16_preds.append(vgg16_pred)
+        effnet_preds.append(effnet_pred)
+        inception_preds.append(inception_pred)
+    
+        autoencoder_loss = getAutoencoderLoss(imageCroppedBounds, autoencoder, 256)
+        vae_loss = getAutoencoderLoss(imageCroppedBounds, vae, 224)
+
+        autoencoder_preds.append(autoencoder_loss)
+        vae_preds.append(vae_loss)
+
 
     #rg_likelihood = np.mean((seresnext_pred, densenet_pred, vgg16_pred, effnet_pred, inception_pred))
-    rg_likelihood = np.mean((seresnext_pred, densenet_pred, effnet_pred, inception_pred))
+    
+    rg_likelihood = np.mean((np.mean(seresnext_preds), 
+                                np.mean(densenet_preds),
+                                    np.mean(vgg16_preds),  
+                                        np.mean(effnet_preds), 
+                                            np.mean(inception_preds)))
     rg_binary = bool(rg_likelihood > 0.5)
     
     if rg_likelihood >= 0 and rg_likelihood <= 0.5:
-        pred_scale =  2 * rg_likelihood
+        pred_scale =  rg_likelihood
     else:
-        pred_scale = -2 * (rg_likelihood - 1)
+        pred_scale = -(rg_likelihood - 1)
     
-    ungradability_score = (1-OD_conf) * pred_scale * autoencoder_loss * vae_loss
-    ungradability_binary = bool(ungradability_score > 2.24e-06)
+    ungradability_score = pred_scale * autoencoder_loss * vae_loss
+    ungradability_binary = bool(pred_scale > 0.2)
     
     out = {
         "referable-glaucoma-likelihood": rg_likelihood,  # Likelihood for 'referable glaucoma'
