@@ -402,33 +402,23 @@ def getPreds(OD_fullsize, imageCroppedBounds, OD_conf, densenet, seresnext, effn
     inception_preds = []
     autoencoder_preds = []
     vae_preds = []
-    
-    im120Master = OD_fullsize.resize((120,120))
-    im224Master = OD_fullsize.resize((224,224))
-    im299Master = OD_fullsize.resize((299,299))
 
     for flip in ["h", "v", "neither"]: 
         if flip == "h":
-            im120 = OD_fullsize.resize((120,120)).transpose(Image.FLIP_TOP_BOTTOM)
-            im224 = OD_fullsize.resize((224,224)).transpose(Image.FLIP_TOP_BOTTOM)
-            im299 = OD_fullsize.resize((299,299)).transpose(Image.FLIP_TOP_BOTTOM)
+            imTransposed = OD_fullsize.transpose(Image.FLIP_TOP_BOTTOM)
             imageCroppedBounds_flipped = imageCroppedBounds.transpose(Image.FLIP_TOP_BOTTOM)
         elif flip == "v":
-            im120 = OD_fullsize.resize((120,120)).transpose(Image.FLIP_LEFT_RIGHT)
-            im224 = OD_fullsize.resize((224,224)).transpose(Image.FLIP_LEFT_RIGHT)
-            im299 = OD_fullsize.resize((299,299)).transpose(Image.FLIP_LEFT_RIGHT)
+            imTransposed = OD_fullsize.transpose(Image.FLIP_LEFT_RIGHT)
             imageCroppedBounds_flipped = imageCroppedBounds.transpose(Image.FLIP_LEFT_RIGHT)
         else:
-            im120 = OD_fullsize.resize((120,120))
-            im224 = OD_fullsize.resize((224,224))
-            im299 = OD_fullsize.resize((299,299))
+            imTransposed = OD_fullsize
             imageCroppedBounds_flipped = imageCroppedBounds
     
-        seresnext_pred = predictSingle(seresnext, im224, 224)
-        densenet_pred = predictSingle(densenet, im120, 120)
-        vgg16_pred = predictSingle(vgg16, im120, 120)
-        effnet_pred = predictSingle(effnet, im224, 224)
-        inception_pred = predictSingle(inception, im299, 299)
+        seresnext_pred = predictSingle(seresnext, imTransposed, 224)
+        densenet_pred = predictSingle(densenet, imTransposed, 120)
+        vgg16_pred = predictSingle(vgg16, imTransposed, 120)
+        effnet_pred = predictSingle(effnet, imTransposed, 224)
+        inception_pred = predictSingle(inception, imTransposed, 299)
 
         seresnext_preds.append(seresnext_pred)
         densenet_preds.append(densenet_pred)
@@ -456,7 +446,7 @@ def getPreds(OD_fullsize, imageCroppedBounds, OD_conf, densenet, seresnext, effn
     else:
         pred_scale = -(rg_likelihood - 1)
     
-    ungradability_score = pred_scale * autoencoder_loss * vae_loss
+    ungradability_score = pred_scale * np.mean(autoencoder_preds) * np.mean(vae_preds)
     ungradability_binary = bool(pred_scale > 0.2)
     
     out = {
@@ -618,7 +608,7 @@ class airogs_algorithm(ClassificationAlgorithm):
     
     def process_case(self, *, idx, case):
         # Load and test the image(s) for this case
-        print("----Submission 3 TTA Flip-----")
+        print("----Submission FINAL-----")
         print("DEVICE is: " + device)
         yolo_weights = 'yolov5'
         se_resnext_weights = "se_resnext_weights.pth"
